@@ -6,7 +6,7 @@ A small Tkinter desktop tool for planning and iterating an endurance race pit/en
 
 - Generates an initial pit/strategy plan from baseline race parameters.
 - Lets you “recalculate” mid-race by entering current progress (laps completed, extra pit time, updated lap time, etc.).
-- Produces a step-by-step strategy log including pit windows and (when applicable) warnings when tire wear exceeds margin.
+- Produces a step-by-step strategy log including pit windows and (when applicable) warnings when tire wear exceeds a +15% expected lifespan margin.
 
 ## How to run
 
