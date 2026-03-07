@@ -128,16 +128,24 @@ class RaceStrategyApp:
         swap_needed = []
         if available_swaps >= estimated_stops:
             swap_needed = [True] * estimated_stops
+        elif available_swaps <= 0:
+            swap_needed = [False] * estimated_stops
         else:
-            accumulator = 0.0
-            ratio = available_swaps / estimated_stops if estimated_stops > 0 else 0
-            for _ in range(estimated_stops):
-                accumulator += ratio
-                if accumulator >= 1.0:
+            # Distribute swaps evenly by computing gap sizes between swaps.
+            # With w swaps in n stops there are w+1 slots (before/between/after swaps).
+            # Allocating floor or ceil skips per slot minimises the maximum number of
+            # consecutive non-swap stops while keeping swaps as evenly spread as possible.
+            n = estimated_stops
+            w = available_swaps
+            total_skips = n - w
+            slots = w + 1
+            base_gap = total_skips // slots
+            extra_gaps = total_skips % slots   # first extra_gaps slots get one extra skip
+            for slot in range(slots):
+                gap_size = base_gap + (1 if slot < extra_gaps else 0)
+                swap_needed.extend([False] * gap_size)
+                if slot < w:
                     swap_needed.append(True)
-                    accumulator -= 1.0
-                else:
-                    swap_needed.append(False)
         
         self.output_text.insert(tk.END, f"Stint {stint_num:02d}: Driving {max_stint_laps} Laps\n")
 
