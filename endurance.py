@@ -113,91 +113,104 @@ class RaceStrategyApp:
 
     def run_simulation(self, rem_mins, lap_time, e_per_lap, t_life, tires_in_garage, start_lap, is_recalc):
         total_rem_secs = rem_mins * 60
-        elapsed_secs = 0
+        driving_secs = 0   # driving time only — controls loop/finish (no pit overhead)
+        display_secs = 0   # driving + pit overhead — used for pit window display
         current_lap = start_lap
-        tires_left = tires_in_garage 
+        tires_left = tires_in_garage
         laps_on_current_set = 0
         stint_num = 1
-        
-        max_stint_laps = math.floor(self.energy_cap.get() / e_per_lap)
-        
-        # 1. DISTRIBUTION CALC
+
+        max_stint_laps = max(1, math.floor(self.energy_cap.get() / e_per_lap))
+        limit = t_life if self.strict_tire_mode.get() else (t_life * 1.15)
+
+        # 1. DISTRIBUTION CALC (pit-timing independent)
+        # estimated_stops is based on driving time only so it matches the loop iterations exactly.
         estimated_stops = math.floor(total_rem_secs / (max_stint_laps * lap_time))
+
+        # Only plan the swaps that tire life actually requires; never add extra swaps
+        # just because spare tires are available (target is tire-life efficiency, not 0 remaining).
+        stints_per_set = max(1, math.floor(limit / max_stint_laps))
+        required_swaps = math.floor(estimated_stops / stints_per_set)
         available_swaps = tires_left // 4
-        
+        planned_swaps = min(required_swaps, available_swaps)
+
+        # Centered Bresenham: spread planned_swaps evenly across estimated_stops pit stops.
+        # Starting accumulator at 0.5 centers the distribution so swaps are never
+        # bunched at the start or end of the race.
         swap_needed = []
-        if available_swaps >= estimated_stops:
+        if planned_swaps >= estimated_stops:
             swap_needed = [True] * estimated_stops
-        elif available_swaps <= 0:
+        elif planned_swaps <= 0:
             swap_needed = [False] * estimated_stops
         else:
-            # Distribute swaps evenly by computing gap sizes between swaps.
-            # With w swaps in n stops there are w+1 slots (before/between/after swaps).
-            # Allocating floor or ceil skips per slot minimises the maximum number of
-            # consecutive non-swap stops while keeping swaps as evenly spread as possible.
-            n = estimated_stops
-            w = available_swaps
-            total_skips = n - w
-            slots = w + 1
-            base_gap = total_skips // slots
-            extra_gaps = total_skips % slots   # first extra_gaps slots get one extra skip
-            for slot in range(slots):
-                gap_size = base_gap + (1 if slot < extra_gaps else 0)
-                swap_needed.extend([False] * gap_size)
-                if slot < w:
+            accumulator = 0.5
+            ratio = planned_swaps / estimated_stops
+            for _ in range(estimated_stops):
+                accumulator += ratio
+                if accumulator >= 1.0:
                     swap_needed.append(True)
-        
+                    accumulator -= 1.0
+                else:
+                    swap_needed.append(False)
+
         self.output_text.insert(tk.END, f"Stint {stint_num:02d}: Driving {max_stint_laps} Laps\n")
 
         stop_idx = 0
-        limit = t_life if self.strict_tire_mode.get() else (t_life * 1.15)
 
-        while elapsed_secs < total_rem_secs:
-            if elapsed_secs + (max_stint_laps * lap_time) >= total_rem_secs:
-                laps_to_fin = math.ceil((total_rem_secs - elapsed_secs) / lap_time)
+        while driving_secs < total_rem_secs:
+            if driving_secs + (max_stint_laps * lap_time) >= total_rem_secs:
+                laps_to_fin = math.ceil((total_rem_secs - driving_secs) / lap_time)
                 self.output_text.insert(tk.END, f"FINISH - {laps_to_fin} laps to checkered flag.\n")
                 self.output_text.insert(tk.END, f"         [Total Race Laps: {current_lap + laps_to_fin} | Tires Remaining: {tires_left}]\n")
                 break
 
-            elapsed_secs += (max_stint_laps * lap_time)
+            driving_secs += (max_stint_laps * lap_time)
+            display_secs += (max_stint_laps * lap_time)
             current_lap += max_stint_laps
             laps_on_current_set += max_stint_laps
-            
-            # 2. DECISION LOGIC WITH HARD FLOOR
+
+            # 2. DECISION LOGIC
             should_swap = False
             if stop_idx < len(swap_needed):
                 should_swap = swap_needed[stop_idx]
-            
-            # Safety Check Override
-            if (laps_on_current_set + max_stint_laps) > limit:
-                should_swap = True
 
-            # THE HARD FLOOR: Final check against inventory
+            # Safety check: when tire life would be exceeded, shift the next planned swap
+            # to now rather than forcing an unplanned extra swap that drains inventory early.
+            if (laps_on_current_set + max_stint_laps) > limit and not should_swap:
+                for future_idx in range(stop_idx + 1, len(swap_needed)):
+                    if swap_needed[future_idx]:
+                        swap_needed[future_idx] = False
+                        should_swap = True
+                        break
+                # If no future swap available: accept tire extension; hard floor below
+                # will block the swap if inventory is also exhausted.
+
+            # Hard floor: never swap without inventory
             if should_swap and tires_left < 4:
                 should_swap = False
 
             if should_swap:
                 action = "VE + TIRES"
-                elapsed_secs += self.pit_tires_secs.get()
+                display_secs += self.pit_tires_secs.get()
                 tires_left -= 4
                 laps_on_current_set = 0
             else:
                 action = "VE ONLY"
-                elapsed_secs += self.pit_energy_secs.get()
+                display_secs += self.pit_energy_secs.get()
 
             # 3. WARNINGS & LOGGING
             danger = (laps_on_current_set + max_stint_laps) > limit
-            time_str = f"+{int(elapsed_secs/3600):02d}h {int((elapsed_secs%3600)/60):02d}m"
+            time_str = f"+{int(display_secs/3600):02d}h {int((display_secs%3600)/60):02d}m"
             stint_num += 1
-            
+
             line_text = f"LAP {current_lap:03d} - Stint {stint_num:02d}: {max_stint_laps} Laps | {action} | Tires in Garage: {tires_left}\n"
-            
+
             if danger and not should_swap:
                 self.output_text.insert(tk.END, f"  >> WARNING: TIRE WEAR EXCEEDS MARGIN ON NEXT STINT <<\n", "warning")
                 self.output_text.insert(tk.END, line_text, "warning")
             else:
                 self.output_text.insert(tk.END, line_text)
-                
+
             self.output_text.insert(tk.END, f"          Pit Window: {time_str}\n\n")
             stop_idx += 1
 
