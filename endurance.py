@@ -177,7 +177,7 @@ class RaceStrategyApp:
 
     def run_simulation(
         self, rem_mins, lap_time, e_per_lap, t_life, tires_in_garage, start_lap, is_recalc
-    ):        
+    ):
         # First pass: plan stops over the *nominal* time to estimate pit-loss.
         rough_stops = calculate_strategy(
             rem_mins,
@@ -223,7 +223,13 @@ class RaceStrategyApp:
                 ),
             )
 
-        for s in stops:
+        # Identify the final pit stop so we can annotate it.
+        last_stop_idx = None
+        for i, s in enumerate(stops):
+            if s.get("type") == "stop":
+                last_stop_idx = i
+
+        for i, s in enumerate(stops):
             if s["type"] == "finish":
                 # Compute laps-to-finish from the pit-loss-adjusted lap count.
                 current_lap_at_finish_calc = s["lap"] - s["laps_to_fin"]
@@ -244,11 +250,22 @@ class RaceStrategyApp:
                     f"+{int(s['display_secs']/3600):02d}h "
                     f"{int((s['display_secs']%3600)/60):02d}m"
                 )
+
+                # Base line
                 line_text = (
                     f"LAP {s['lap']:03d} - Stint {s['stint_num']:02d}: "
                     f"{s['max_stint_laps']} Laps | {s['action']} | "
-                    f"Tires in Garage: {s['tires_left']}\n"
+                    f"Tires in Garage: {s['tires_left']}"
                 )
+
+                # If this is the final stop, append VE needed for the final stint.
+                if last_stop_idx is not None and i == last_stop_idx:
+                    laps_remaining = max(0, total_race_laps - s["lap"])
+                    laps_for_fuel = laps_remaining + 1  # default: +1 extra lap
+                    ve_needed = laps_for_fuel * float(e_per_lap)
+                    line_text += f" | VE Needed: {ve_needed:.1f}% ({laps_for_fuel} laps)"
+
+                line_text += "\n"
 
                 if s["danger"] and s["action"] == "VE ONLY":
                     self.output_text.insert(
