@@ -66,7 +66,8 @@ class TestCalculateStrategy(unittest.TestCase):
     def test_insufficient_tires_warnings_distributed(self):
         """24 total tires (20 in garage) → 5 available, 7 required.
         Warnings must be distributed through the race (not bunched at the end)
-        and must not exceed 2 consecutive (minimum unavoidable with stints_per_set=2)."""
+        and must NEVER be back-to-back: every warning stop must be immediately
+        followed by a swap that resets the tire age."""
         result = calculate_strategy(
             rem_mins=360, lap_time=125.0, e_per_lap=9.0, t_life=22,
             tires_in_garage=20,
@@ -82,15 +83,61 @@ class TestCalculateStrategy(unittest.TestCase):
             "Last stop must not be a warning — warnings should be distributed",
         )
 
-        # At most 2 consecutive warnings (back-to-back is unavoidable when
-        # stints_per_set=2 and a required swap is skipped, but 3 in a row is not).
+        # No two consecutive warnings anywhere in the race.
         actions = ['W' if (s['danger'] and s['action'] == 'VE ONLY') else 'O' for s in stops]
-        self.assertLessEqual(
-            self._max_consecutive(actions, 'W'), 2,
-            "No more than 2 consecutive warnings when stints_per_set=2",
+        self.assertEqual(
+            self._max_consecutive(actions, 'W'), min(1, actions.count('W')),
+            "Extended stints must never be back-to-back: every warning must be "
+            "immediately followed by a tire swap",
         )
 
-    def test_tire_life_example_only_needed_swaps(self):
+    def test_no_back_to_back_warnings(self):
+        """Every warning stop must be immediately followed by a tire swap.
+        This is the core invariant of the block-based distribution algorithm."""
+        result = calculate_strategy(
+            rem_mins=360, lap_time=125.0, e_per_lap=9.0, t_life=22,
+            tires_in_garage=20,
+        )
+        stops = self._stops(result)
+        for i, s in enumerate(stops[:-1]):
+            if s['danger'] and s['action'] == 'VE ONLY':
+                next_s = stops[i + 1]
+                self.assertEqual(
+                    next_s['action'], 'VE + TIRES',
+                    f"Stop {i} (LAP {s['lap']}) has a warning but stop {i+1} "
+                    f"(LAP {next_s['lap']}) is '{next_s['action']}' — "
+                    "back-to-back extended stints must never occur",
+                )
+
+    def test_no_back_to_back_warnings_very_low_inventory(self):
+        """Even with very few tires (8 = 2 swaps), back-to-back warnings must not
+        appear WITHIN the swap-block portion of the race. They may appear in the
+        final run (after the last swap) because no more inventory exists — that is
+        mathematically unavoidable, not an algorithm error."""
+        result = calculate_strategy(
+            rem_mins=360, lap_time=125.0, e_per_lap=9.0, t_life=22,
+            tires_in_garage=8,
+        )
+        stops = self._stops(result)
+
+        # Find the index of the last swap.
+        last_swap_idx = max(
+            (i for i, s in enumerate(stops) if s['action'] == 'VE + TIRES'),
+            default=-1,
+        )
+
+        # Within the swap-block section (up to and including the last swap),
+        # every warning must be immediately followed by a tire swap.
+        for i, s in enumerate(stops[:last_swap_idx]):
+            if s['danger'] and s['action'] == 'VE ONLY':
+                next_s = stops[i + 1]
+                self.assertEqual(
+                    next_s['action'], 'VE + TIRES',
+                    f"Back-to-back warning at stop {i} within swap blocks "
+                    f"(last swap at stop {last_swap_idx})",
+                )
+
+
         """90-lap race at 60 s/lap, tire life 20 laps, 100 tires in garage.
         Only 4 swaps should be planned; many tires remain at the end."""
         # max_stint = floor(90/9) = 10 laps; 9 stops; limit = 20 * 1.15 = 23.0 laps;

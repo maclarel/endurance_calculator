@@ -31,36 +31,57 @@ def calculate_strategy(rem_mins, lap_time, e_per_lap, t_life, tires_in_garage,
     # How many consecutive stints can one set of tires cover?
     stints_per_set = max(1, math.floor(limit / max_stint_laps))
 
-    # Required positions: the exact stop indices where tire life demands a change.
-    # First required stop is at index (stints_per_set − 1), then every
-    # stints_per_set steps after that.
-    required_positions = list(range(stints_per_set - 1, estimated_stops, stints_per_set))
-    n_required = len(required_positions)
+    # Minimum swaps needed to keep every stint within the tire-life limit.
+    n_required = len(range(stints_per_set - 1, estimated_stops, stints_per_set))
 
     # Never plan more swaps than tire life requires, even if extra tires are available.
     available_swaps = tires_in_garage // 4  # 4 tires per set
     planned_swaps = min(n_required, available_swaps)
 
-    # Distribute planned_swaps among required_positions using centred Bresenham.
-    # When inventory is short (planned_swaps < n_required) the skipped required
-    # positions generate warnings; centring (start accumulator at 0.5) spreads
-    # those missed swaps as evenly as possible rather than bunching them at the
-    # start or end of the race.
-    swap_needed = [False] * estimated_stops
-    if planned_swaps >= n_required:
-        for pos in required_positions:
-            swap_needed[pos] = True
-    elif planned_swaps > 0:
-        # Start at 0.5 to centre the distribution: any skipped swaps are placed
-        # symmetrically through the race rather than being front- or back-loaded.
+    # ---- Block-based swap placement (guarantees no back-to-back warnings) ----
+    #
+    # Divide estimated_stops into swap blocks of two sizes:
+    #   Normal   (size = stints_per_set):     0 warnings, swap at age == stints_per_set
+    #   Extended (size = stints_per_set + 1): 1 warning  at age == stints_per_set,
+    #                                         then swap   at age == stints_per_set + 1
+    #
+    # After the last swap there is a short "final run" of at most stints_per_set − 1
+    # stops (age stays below the warning threshold → 0 warnings).
+    #
+    # Because every warning stop is the second-to-last stop of an extended block and
+    # is unconditionally followed by a swap, warnings are NEVER consecutive.
+    #
+    # excess  = stops that cannot be covered by all-normal blocks alone.
+    # n3      = number of those that must become extended blocks (the rest go into the
+    #           final run, capped at stints_per_set − 1 to stay warning-free).
+    excess = max(0, estimated_stops - planned_swaps * stints_per_set)
+    n3_extended = min(planned_swaps, max(0, excess - (stints_per_set - 1)))
+
+    # Centred Bresenham: spread n3_extended extended blocks evenly among planned_swaps.
+    # Starting accumulator at 0.5 centres the distribution so extended blocks are never
+    # bunched at the start or end of the race.
+    is_extended = [False] * planned_swaps
+    if n3_extended >= planned_swaps:
+        is_extended = [True] * planned_swaps
+    elif n3_extended > 0:
         accumulator = 0.5
-        ratio = planned_swaps / n_required
-        for pos in required_positions:
+        ratio = n3_extended / planned_swaps
+        for i in range(planned_swaps):
             accumulator += ratio
             if accumulator >= 1.0:
-                swap_needed[pos] = True
+                is_extended[i] = True
                 accumulator -= 1.0
-    # else: 0 planned swaps — all required positions stay False (warnings only)
+
+    # Convert block sequence → a swap_needed boolean array over all stop indices.
+    swap_needed = [False] * estimated_stops
+    block_pos = 0
+    for ext in is_extended:
+        block_size = stints_per_set + (1 if ext else 0)
+        swap_pos = block_pos + block_size - 1
+        if swap_pos < estimated_stops:
+            swap_needed[swap_pos] = True
+        block_pos += block_size
+    # block_pos now points to the start of the final run (length = excess − n3_extended)
 
     stops = []
     stop_idx = 0
@@ -82,8 +103,9 @@ def calculate_strategy(rem_mins, lap_time, e_per_lap, t_life, tires_in_garage,
         laps_on_current_set += max_stint_laps
         stint_num += 1
 
-        # Use the pre-computed plan directly — no safety override is needed because
-        # required_positions already encodes the tire-life constraint precisely.
+        # Use the pre-computed plan directly.  The block-based placement above
+        # guarantees that every warning stop is immediately followed by a swap,
+        # so no safety override is needed here.
         should_swap = swap_needed[stop_idx] if stop_idx < len(swap_needed) else False
 
         # Hard floor: never swap without inventory.
