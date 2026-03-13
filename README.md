@@ -10,10 +10,25 @@ A small Tkinter desktop tool for planning and iterating an endurance race pit/en
 
 ## How to run
 
+### Windows
 You can download the Windows executable from the [Releases](https://github.com/maclarel/endurance_calculator/releases) page, or run the Python code directly if you have Python installed.
 
+
+### Linux
 ```bash
 python main.py
+```
+
+### macOS
+macOS requires some additional configuration since the Python version used by the OS is heavily outdated (3.9.6) and does not support tkinter. You'll need a newer version of Python installed through [Homebrew](https://brew.sh/):
+
+```bash
+# Install Python 3.14 + tkinter via Homebrew
+brew install python@3.14
+brew install python-tk@3.14
+
+# Run the app using the Homebrew-installed Python
+python3.14 main.py
 ```
 
 ## How to use
